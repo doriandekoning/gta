@@ -1,4 +1,4 @@
-module github.com/digitalocean/gta
+module github.com/doriandekoning/gta
 
 go 1.15
 

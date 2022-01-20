@@ -10,11 +10,15 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/pkg/errors"
 )
 
 // A Differ implements provides methods that return values to understand the
@@ -140,6 +144,7 @@ func (d *differ) DiffFiles() (map[string]bool, error) {
 func getMergeParents() (parent1 string, rightwardParents []string, err error) {
 	out, err := exec.Command("git", "log", "-1", "--pretty=format:%p").Output()
 	if err != nil {
+		fmt.Println("Git log 1 failed")
 		return
 	}
 	parents := strings.TrimSpace(string(out))
@@ -155,6 +160,7 @@ func getMergeParents() (parent1 string, rightwardParents []string, err error) {
 	// for squash-merge/rebase commits, get the most recent merge commit hash and use as left parent
 	out, err = exec.Command("git", "log", "-1", "--merges", "--pretty=format:%h").Output()
 	if err != nil {
+		fmt.Println("git log failed")
 		return
 	}
 	parent1 = strings.TrimSpace(string(out))
@@ -167,9 +173,16 @@ func (g *git) diff() (map[string]struct{}, error) {
 	g.onceDiff.Do(func() {
 		files, err := func() (map[string]struct{}, error) {
 			// We get the root of the repository to build our full path.
-			out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+			cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+			stdErrWriter, _ := cmd.StderrPipe()
+
+			out, err := cmd.Output()
 			if err != nil {
 				return nil, err
+			}
+			stdErr, _ := ioutil.ReadAll(stdErrWriter)
+			if len(stdErr) > 0 {
+				log.Fatal(stdErr)
 			}
 			root := strings.TrimSpace(string(out))
 			parent1 := g.baseBranch
@@ -177,7 +190,7 @@ func (g *git) diff() (map[string]struct{}, error) {
 			if g.useMergeCommit {
 				parent1, rightwardParents, err = getMergeParents()
 				if err != nil {
-					return nil, err
+					return nil, errors.Wrap(err, "getting merge parents")
 				}
 			}
 
@@ -188,11 +201,19 @@ func (g *git) diff() (map[string]struct{}, error) {
 				cmd := exec.Command("git", "diff", fmt.Sprintf("%s...%s", parent1, parent2), "--name-only", "--no-renames")
 				stdout, err := cmd.StdoutPipe()
 				if err != nil {
+					log.Fatal("git diff failed")
 					return nil, err
 				}
 
+				stdErr, _ := cmd.StderrPipe()
+
 				if err := cmd.Start(); err != nil {
 					return nil, err
+				}
+
+				stdErrByts, _ := ioutil.ReadAll(stdErr)
+				if len(stdErrByts) > 0 {
+					log.Fatal(string(stdErrByts))
 				}
 
 				changedPaths, err := diffPaths(root, stdout)
